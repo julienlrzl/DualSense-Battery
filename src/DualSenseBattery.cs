@@ -1230,18 +1230,74 @@ namespace DualSenseBattery
             return Glyph(BatteryGlyph(b.Level, b.Charging), BatteryGlyph(0, false), size, size, c);
         }
 
+        // Chiffres de l'icône « Pourcentage » : tracés vectoriels de la même hauteur pour 5, 40 ou 100,
+        // espacement serré et régulier, hauteur et position calées sur des pixels entiers pour rester nets.
+        const string NumberFamily = "Segoe UI";
+        const float NumEm = 100f, NumGap = 8f, NumNarrow = 0.82f;   // Segoe UI Bold légèrement resserré : « 4 » fermé, lisible à 16 px
+
+        static SD2.GraphicsPath DigitPath(SD.FontFamily ff, SD.FontStyle style, string s)
+        {
+            SD2.GraphicsPath p = new SD2.GraphicsPath();
+            p.AddString(s, ff, (int)style, NumEm, SD.PointF.Empty, SD.StringFormat.GenericTypographic);
+            return p;
+        }
+
+        // Largeur d'un nombre quand ses chiffres sont posés encre contre encre, séparés de NumGap
+        static float NumberWidth(SD.FontFamily ff, SD.FontStyle style, string s)
+        {
+            float w = 0;
+            foreach (char ch in s)
+                using (SD2.GraphicsPath p = DigitPath(ff, style, ch.ToString())) w += p.GetBounds().Width;
+            return w + NumGap * (s.Length - 1);
+        }
+
         static SD.Bitmap NumberIcon(int size, int percent, SD.Color c)
         {
+            string s = percent.ToString(CultureInfo.InvariantCulture);
             SD.Bitmap bmp = new SD.Bitmap(size, size, SDI.PixelFormat.Format32bppArgb);
-            string s = percent >= 100 ? "100" : percent.ToString(CultureInfo.InvariantCulture);
+            SD.FontStyle style = SD.FontStyle.Bold;
+            using (SD.FontFamily ff = new SD.FontFamily(NumberFamily))
             using (SD.Graphics g = SD.Graphics.FromImage(bmp))
-            using (SD.FontFamily ff = new SD.FontFamily("Segoe UI"))
+            using (SD.SolidBrush br = new SD.SolidBrush(c))
             {
                 g.Clear(SD.Color.Transparent);
-                float em = s.Length >= 3 ? size * 0.60f : size * 0.80f;
-                DrawCentered(g, s, s.Length >= 3 ? "100" : "88", ff, SD.FontStyle.Bold, size, em, c);
+                g.SmoothingMode = SD2.SmoothingMode.AntiAlias;
+                g.PixelOffsetMode = SD2.PixelOffsetMode.HighQuality;
+
+                // même boîte verticale pour tous les chiffres, taille fixée par « 100 » (le plus large)
+                SD.RectangleF digits;
+                using (SD2.GraphicsPath all = DigitPath(ff, style, "0123456789")) digits = all.GetBounds();
+                float scale = Math.Min(size / (NumberWidth(ff, style, "100") * NumNarrow), size * 0.7f / digits.Height);
+                float h = (float)Math.Floor(digits.Height * scale);
+                scale = h / digits.Height;
+                float x = (size - NumberWidth(ff, style, s) * NumNarrow * scale) / 2f;
+                float top = (float)Math.Round((size - h) / 2f);
+
+                foreach (char ch in s)
+                    using (SD2.GraphicsPath p = DigitPath(ff, style, ch.ToString()))
+                    {
+                        SD.RectangleF b = p.GetBounds();
+                        using (SD2.Matrix m = new SD2.Matrix())
+                        {
+                            m.Translate((float)Math.Round(x), top);   // chaque chiffre démarre sur un pixel entier
+                            m.Scale(scale * NumNarrow, scale);
+                            m.Translate(-b.X, -digits.Y);
+                            p.Transform(m);
+                        }
+                        g.FillPath(br, p);
+                        x += (b.Width + NumGap) * NumNarrow * scale;
+                    }
             }
             return bmp;
+        }
+
+        // Éclair vectoriel de hauteur h centré sur (cx, cy) : forme dessinée à la main, centrée géométriquement
+        static void FillBolt(SD.Graphics g, SD.Color c, float cx, float cy, float h)
+        {
+            float[] u = { 0.60f, 0f, 0.13f, 0.58f, 0.46f, 0.58f, 0.40f, 1f, 0.87f, 0.42f, 0.54f, 0.42f };
+            SD.PointF[] p = new SD.PointF[u.Length / 2];
+            for (int i = 0; i < p.Length; i++) p[i] = new SD.PointF(cx + (u[2 * i] - 0.5f) * h, cy + (u[2 * i + 1] - 0.5f) * h);
+            using (SD.SolidBrush br = new SD.SolidBrush(c)) g.FillPolygon(br, p);
         }
 
         static SD.Bitmap RingIcon(int size, Battery b, SD.Color c, SD.Color fg)
@@ -1251,7 +1307,9 @@ namespace DualSenseBattery
             {
                 g.Clear(SD.Color.Transparent);
                 g.SmoothingMode = SD2.SmoothingMode.AntiAlias;
-                float t = Math.Max(2f, size / 7f), inset = t / 2f + 0.5f;
+                g.PixelOffsetMode = SD2.PixelOffsetMode.HighQuality;
+                float t = Math.Max(2f, (float)Math.Round(size / 8f * 2f) / 2f);   // 16 → 2, 20 → 2,5, 24 → 3, 32 → 4
+                float inset = t / 2f + 0.5f;
                 SD.RectangleF r = new SD.RectangleF(inset, inset, size - 2 * inset, size - 2 * inset);
                 using (SD.Pen track = new SD.Pen(SD.Color.FromArgb(70, fg), t))
                 using (SD.Pen arc = new SD.Pen(c, t))
@@ -1262,8 +1320,10 @@ namespace DualSenseBattery
                     if (sweep >= 359.9f) g.DrawEllipse(arc, r); else g.DrawArc(arc, r, -90, sweep);
                 }
                 if (b.Charging)
-                    using (SD.FontFamily ff = new SD.FontFamily(IconFont))
-                        DrawCentered(g, "", null, ff, SD.FontStyle.Regular, size, size * 0.5f, c);
+                {
+                    float inner = size - 2 * (inset + t / 2f);
+                    FillBolt(g, c, size / 2f, size / 2f, inner * 0.56f);
+                }
             }
             return bmp;
         }
@@ -3028,7 +3088,7 @@ namespace DualSenseBattery
             }
 
             if (scen == "ico") { Art.WriteIco(outp); return; }
-            if (scen == "icones") { DumpIcons(outp, th); return; }
+            if (scen == "icones") { DumpIcons(outp, th, a.Length > 3 && a[3] == "complet"); return; }
             if (scen == "toast")
             {
                 Toasts.Init();
@@ -3120,35 +3180,49 @@ namespace DualSenseBattery
             }
         }
 
-        static void DumpIcons(string path, Theme th)
+        // Planche de contrôle des icônes : chaque état agrandi (pixels visibles), puis en vraie taille 16/20/24/32 px,
+        // sur barre des tâches sombre puis claire. « complet » : tous les pourcentages du style « Pourcentage ».
+        static void DumpIcons(string path, Theme th, bool full)
         {
-            int s = 24, scale = 4, n = 0;
             List<KeyValuePair<int, Battery>> states = new List<KeyValuePair<int, Battery>>();
-            foreach (int style in new[] { 0, 1, 2 })
-            {
-                states.Add(new KeyValuePair<int, Battery>(style, new Battery { Level = 7, Status = 0 }));
-                states.Add(new KeyValuePair<int, Battery>(style, new Battery { Level = 10, Status = 2 }));
-                states.Add(new KeyValuePair<int, Battery>(style, new Battery { Level = 4, Status = 1 }));
-                states.Add(new KeyValuePair<int, Battery>(style, new Battery { Level = 1, Status = 0 }));
-            }
-            using (SD.Bitmap sheet = new SD.Bitmap((s * scale + 8) * states.Count + 8, s * scale + 16 + 16 + s))
+            int[][] spec = full
+                ? new[] { new[] { 1, 0, 0 }, new[] { 1, 1, 0 }, new[] { 1, 2, 0 }, new[] { 1, 3, 0 }, new[] { 1, 4, 0 }, new[] { 1, 5, 0 }, new[] { 1, 6, 0 }, new[] { 1, 7, 0 }, new[] { 1, 8, 0 }, new[] { 1, 9, 0 }, new[] { 1, 10, 0 }, new[] { 1, 4, 1 } }
+                : new[] { new[] { 0, 7, 0 }, new[] { 0, 10, 2 }, new[] { 0, 4, 1 }, new[] { 0, 1, 0 },
+                          new[] { 1, 7, 0 }, new[] { 1, 10, 2 }, new[] { 1, 4, 1 }, new[] { 1, 1, 0 },
+                          new[] { 2, 7, 0 }, new[] { 2, 10, 2 }, new[] { 2, 4, 1 }, new[] { 2, 1, 0 } };
+            foreach (int[] x in spec) states.Add(new KeyValuePair<int, Battery>(x[0], new Battery { Level = x[1], Status = x[2] }));
+
+            int zoom = 5, z = 24, cell = z * zoom + 10, pad = 10;
+            int[] sizes = { 16, 20, 24, 32 };
+            int blockH = pad + z * zoom + pad + 32 * sizes.Length + 6 * sizes.Length + pad;
+            using (SD.Bitmap sheet = new SD.Bitmap(pad + cell * states.Count, blockH * 2))
             using (SD.Graphics g = SD.Graphics.FromImage(sheet))
             {
-                g.Clear(th.Light ? SD.Color.FromArgb(238, 238, 238) : SD.Color.FromArgb(32, 32, 32));
                 g.InterpolationMode = SD2.InterpolationMode.NearestNeighbor;
                 g.PixelOffsetMode = SD2.PixelOffsetMode.Half;
-                foreach (KeyValuePair<int, Battery> st in states)
+                for (int pass = 0; pass < 2; pass++)
                 {
-                    using (SD.Bitmap b = Art.TrayBitmap(s, Link.Bluetooth, st.Value, th, st.Key))
+                    Theme t = new Theme { Light = pass == 1, Accent = th.Accent };
+                    int y0 = pass * blockH;
+                    using (SD.SolidBrush bg = new SD.SolidBrush(t.Light ? SD.Color.FromArgb(243, 243, 243) : SD.Color.FromArgb(28, 28, 28)))
+                        g.FillRectangle(bg, 0, y0, sheet.Width, blockH);
+                    for (int n = 0; n < states.Count; n++)
                     {
-                        int x = 8 + n * (s * scale + 8);
-                        g.DrawImage(b, new SD.Rectangle(x, 8, s * scale, s * scale));
-                        g.DrawImage(b, x, s * scale + 16);
+                        int x = pad + n * cell;
+                        using (SD.Bitmap b = Art.TrayBitmap(z, Link.Bluetooth, states[n].Value, t, states[n].Key))
+                            g.DrawImage(b, new SD.Rectangle(x, y0 + pad, z * zoom, z * zoom));
+                        int y = y0 + pad + z * zoom + pad;
+                        foreach (int s in sizes)
+                        {
+                            using (SD.Bitmap b = Art.TrayBitmap(s, Link.Bluetooth, states[n].Value, t, states[n].Key))
+                                g.DrawImageUnscaled(b, x + (z * zoom - s) / 2, y + (32 - s) / 2);
+                            y += 32 + 6;
+                        }
                     }
-                    n++;
                 }
                 sheet.Save(path, SDI.ImageFormat.Png);
             }
+            Log.Write("Taille des icônes de la zone de notification ici : " + WF.SystemInformation.SmallIconSize.Width + " px");
         }
     }
 }

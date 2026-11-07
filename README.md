@@ -32,7 +32,7 @@ One tiny `.exe` (~170 KB). No installer, no Steam, no drivers, no internet.
 </p>
 
 <p align="center">
-  <img src="docs/tray-icons.png" alt="Tray icon styles: battery, percentage, ring">
+  <img src="docs/tray-icons.png" alt="Tray icon styles (battery, percentage, ring), enlarged and at real size 16 to 32 px, dark and light taskbar">
 </p>
 
 ## Download
